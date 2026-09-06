@@ -1,0 +1,13 @@
+{
+  "engine": "pocket",
+  "pocket_voice": "voices/bella.safetensors",
+  "pocket_threads": 4,
+  "voice": "af_bella",
+  "speed": 1.15,
+  "lang": "en-us",
+  "sentence_pause_ms": 120,
+  "duck_factor": 0.4,
+  "duck_release_ms": 600,
+  "poll_ms": 60,
+  "max_sentence_chars": 300
+}

@@ -1,0 +1,12 @@
+{
+  "_comment": "Words the voice would otherwise mangle. Edit freely; put private project names in glossary.local.json (gitignored, same shape). codenames: ALL-CAPS token -> spoken form. glossary: exact token -> spoken form.",
+  "codenames": {
+    "KOKORO": "Kokoro",
+    "ACME": "Acme"
+  },
+  "glossary": {
+    "k8s": "kubernetes",
+    "nginx": "engine X",
+    "psql": "P S Q L"
+  }
+}

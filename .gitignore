@@ -1,0 +1,17 @@
+.venv/
+models/
+spool/
+audition/
+__pycache__/
+*.pyc
+*.wav
+speaker.log
+speaker.pid
+heartbeat
+duck_ledger.json
+stop
+off
+check.py
+.pytest_cache/
+glossary.local.json
+!samples/*.wav
