@@ -15,3 +15,12 @@ check.py
 .pytest_cache/
 glossary.local.json
 !samples/*.wav
+
+# voice input (listener.py)
+listener.log
+listener.pid
+listener-heartbeat
+listener-stop
+listen-off
+speaking
+inbox/

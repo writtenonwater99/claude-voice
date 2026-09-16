@@ -40,6 +40,9 @@ LOG = os.path.join(HERE, "speaker.log")
 LEDGER = os.path.join(HERE, "duck_ledger.json")
 PIDFILE = os.path.join(HERE, "speaker.pid")
 STOPFLAG = os.path.join(HERE, "stop")
+BARGE = os.path.join(HERE, "barge")         # listener.py raises it when the user talks over us
+SPEAKING = os.path.join(HERE, "speaking")   # held while audio is out: listener.py
+                                            # discards the mic so Bella is never heard back
 MUTEX_NAME = "Local\\ClaudeVoiceSpeaker"
 CONFIG = os.path.join(HERE, "config.json")
 MODEL = os.path.join(HERE, "models", "kokoro-v1.0.onnx")
@@ -205,6 +208,40 @@ class Ducker:
             pass
 
 
+def _speaking_on():
+    try:
+        with open(SPEAKING, "w") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
+
+
+def _speaking_off():
+    try:
+        os.remove(SPEAKING)
+    except OSError:
+        pass
+
+
+def start_heartbeat():
+    """Beat from before the model load until exit.
+
+    The load is the long pole (pocket: 40-130s cold), and the WSL hook treats a
+    heartbeat older than 6s as death. A single pre-load write only covers the
+    first few seconds of that, so a slow cold start used to invite a respawn
+    every cooldown -- two `run` processes racing the same spool.
+    """
+    def beat():
+        while True:
+            try:
+                with open(HEARTBEAT, "w") as f:
+                    f.write(str(time.time()))
+            except Exception:
+                pass
+            time.sleep(1.0)
+    threading.Thread(target=beat, daemon=True).start()
+
+
 # ------------------------------------------------------------------ speaker
 
 class Speaker:
@@ -265,6 +302,16 @@ class Speaker:
             except Exception:
                 pass
             self.stream = None
+
+    def _abort(self):
+        """Cut immediately. stop() drains whatever portaudio has already buffered
+        -- fine at the end of a turn, wrong when the user is mid-sentence."""
+        if self.stream is not None:
+            try:
+                self.stream.abort()
+            except Exception:
+                pass
+        self._close()
 
     # -- synthesis: a generator of float32 chunks per sentence (pocket streams
     #    sub-sentence chunks; kokoro yields the sentence whole)
@@ -343,7 +390,7 @@ class Speaker:
             if a is END:
                 self.stream.write(self.pause)
                 n += 1
-                if os.path.exists(STOPFLAG):
+                if os.path.exists(STOPFLAG) or os.path.exists(BARGE):
                     log("stop: flag seen mid-utterance, finishing at sentence boundary")
                     break
                 # a notify may jump in between sentences of a long utterance
@@ -353,6 +400,9 @@ class Speaker:
                         if j:
                             self._speak_inline(j)
                 continue
+            if os.path.exists(BARGE):
+                log("barge: user spoke over us, cutting playback")
+                break
             if first is None:
                 first = time.perf_counter() - t0
                 lag = time.time() - job.get("ts", time.time())
@@ -385,15 +435,6 @@ class Speaker:
         poll = self.c["poll_ms"] / 1000
         release_at = None
 
-        def beat():                      # own thread: a 40-second utterance must not look like death
-            while True:
-                try:
-                    with open(HEARTBEAT, "w") as f:
-                        f.write(str(time.time()))
-                except Exception:
-                    pass
-                time.sleep(1.0)
-        threading.Thread(target=beat, daemon=True).start()
         log(f"run: pid={os.getpid()} watching {SPOOL}")
         while True:
             now = time.time()
@@ -415,19 +456,34 @@ class Speaker:
                     continue
                 job = _take(names[0])
                 if job:
+                    _speaking_on()
                     try:
                         self.speak(job)
                     except Exception as e:
                         log(f"speak: ERROR {e!r}")
+                if os.path.exists(BARGE):
+                    dropped = sum(1 for n in _pending() if _take(n) or True)
+                    _speaking_off()
+                    self._abort()          # drops audio already buffered in the device
+                    self.duck.release()
+                    try:
+                        os.remove(BARGE)
+                    except OSError:
+                        pass
+                    log(f"barge: interrupted, dropped {dropped} queued job(s)")
+                    release_at = None
+                    continue
                 release_at = time.time() + self.c["duck_release_ms"] / 1000
                 continue
             if release_at and now >= release_at:
+                _speaking_off()
                 self.duck.release()
                 self._close()
                 release_at = None
             time.sleep(poll)
 
     def shutdown(self):
+        _speaking_off()      # a crash must not leave the listener permanently deaf
         try:
             self.duck.release()
             self._close()
@@ -476,12 +532,8 @@ def main(argv):
         if _MUTEX is None:
             log("run: another speaker holds the mutex; exiting")
             return 0
-        try:                                   # heartbeat before the model loads: closes the
-            with open(HEARTBEAT, "w") as f:    # respawn window while kokoro is still loading
-                f.write(str(time.time()))
-        except Exception:
-            pass
-        Speaker().run()
+        start_heartbeat()                      # before the model loads: a slow cold start
+        Speaker().run()                        # must not read as death to the WSL hook
     elif cmd in ("say", "notify"):
         text = " ".join(argv[2:]) or "If you can hear this, the new voice path works."
         print("queued", enqueue(text, kind="notify" if cmd == "notify" else "speak"))

@@ -88,14 +88,46 @@ def _age(path):
         return 1e9
 
 
+def _claim_spawn():
+    """Win the right to spawn, atomically. Only one caller gets True.
+
+    The old mtime marker was read-then-write: two hook events in the same second
+    (MessageDisplay and Stop both fire on a turn) could both see it stale and both
+    spawn. O_EXCL makes the create itself the arbiter, so the loser never spawns.
+    A lock older than the cooldown is stale and up for grabs -- unlinked, then
+    re-created under the same exclusive-create rule.
+    """
+    lock = os.path.join(STATE, "spawn.lock")
+    try:
+        os.makedirs(STATE, exist_ok=True)
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            if _age(lock) < SPAWN_COOLDOWN_S:
+                return False
+            try:
+                os.unlink(lock)                # both losers may unlink; only one re-creates
+            except OSError:
+                pass
+            try:
+                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                return False
+        try:
+            os.write(fd, str(time.time()).encode())
+        finally:
+            os.close(fd)
+        return True
+    except Exception:
+        return False
+
+
 def _ensure_speaker():
     """Respawn speaker.py on Windows if its heartbeat is stale. Rate-limited."""
     if _age(HEARTBEAT) < HEARTBEAT_STALE_S:
         return
-    marker = os.path.join(STATE, "spawned-at")
-    if _age(marker) < SPAWN_COOLDOWN_S:
+    if not _claim_spawn():
         return
-    _touch(marker)
     try:
         win = subprocess.run(["wslpath", "-w", VOICE_DIR], capture_output=True, text=True,
                              timeout=5).stdout.strip()
