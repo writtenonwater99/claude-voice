@@ -30,6 +30,14 @@ import sys
 import threading
 import time
 
+# Under pythonw.exe (the detached service) there is no console, so sys.stdout and
+# sys.stderr are None. Pocket-TTS writes progress to them while loading, which raised
+# AttributeError("'NoneType' object has no attribute 'write'") and forced the Kokoro
+# fallback on every start. Point them at the null device so library output is harmless.
+for _name in ("stdout", "stderr"):
+    if getattr(sys, _name) is None:
+        setattr(sys, _name, open(os.devnull, "w", encoding="utf-8"))
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
