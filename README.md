@@ -73,6 +73,8 @@ the service. Without this you get the same voice on Kokoro, ~0.4 s slower to sta
 | Mute / unmute | `touch ~/.claude/tts-off` / `rm ~/.claude/tts-off` |
 | Service | `.venv\Scripts\python.exe speaker.py start \| stop \| status` (Windows, in the repo) |
 | Say something | `.venv\Scripts\python.exe speaker.py say "hello"` |
+| Skip the queue | `.venv\Scripts\python.exe speaker.py flush` — cuts the current line and drops everything waiting |
+| Old news | a line that waited longer than `max_job_age_s` (120 s; 0 = off) is dropped, not read |
 | Logs | `speaker.log` (Windows side) · `~/.claude/tts.log` (hook side) |
 | Ducking depth | `duck_factor` in `config.json` (0.4 = others at 40 %), then restart the service |
 | Private jargon | `glossary.local.json` (gitignored) — ALL-CAPS project names and words the voice mangles |

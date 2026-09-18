@@ -10,6 +10,7 @@
   "duck_release_ms": 600,
   "poll_ms": 60,
   "max_sentence_chars": 300,
+  "max_job_age_s": 120,
   "listener_device": null,
   "vad_threshold": 0.5,
   "vad_start_frames": 3,

@@ -11,6 +11,8 @@ heartbeat
 duck_ledger.json
 stop
 off
+flush
+barge
 check.py
 .pytest_cache/
 glossary.local.json

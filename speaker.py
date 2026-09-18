@@ -5,6 +5,7 @@
     python speaker.py say "text"     drop a job into the spool (smoke test)
     python speaker.py notify "text"  same, priority lane
     python speaker.py status         heartbeat age + queue depth
+    python speaker.py flush          drop everything queued and cut the current line
 
 Design (2026-09-06 rebuild): the WSL hooks only write small JSON jobs into
 ./spool/. This process holds Kokoro loaded, watches the spool, cleans the text
@@ -49,6 +50,7 @@ LEDGER = os.path.join(HERE, "duck_ledger.json")
 PIDFILE = os.path.join(HERE, "speaker.pid")
 STOPFLAG = os.path.join(HERE, "stop")
 BARGE = os.path.join(HERE, "barge")         # listener.py raises it when the user talks over us
+FLUSH = os.path.join(HERE, "flush")         # `speaker.py flush`: cut playback, drop the queue
 SPEAKING = os.path.join(HERE, "speaking")   # held while audio is out: listener.py
                                             # discards the mic so Bella is never heard back
 MUTEX_NAME = "Local\\ClaudeVoiceSpeaker"
@@ -56,10 +58,12 @@ CONFIG = os.path.join(HERE, "config.json")
 MODEL = os.path.join(HERE, "models", "kokoro-v1.0.onnx")
 VOICES = os.path.join(HERE, "models", "voices-v1.0.bin")
 SR = 24000
+T_START = time.time()       # process start; see the stale-job rule in run()
 
 DEFAULTS = dict(engine="pocket", pocket_voice="voices/bella.safetensors", pocket_threads=4,
                 voice="af_bella", speed=1.15, lang="en-us", sentence_pause_ms=120,
-                duck_factor=0.35, duck_release_ms=600, poll_ms=60, max_sentence_chars=300)
+                duck_factor=0.35, duck_release_ms=600, poll_ms=60, max_sentence_chars=300,
+                max_job_age_s=120)     # a line that waited longer is old news: dropped, not read
 
 
 def cfg():
@@ -398,7 +402,7 @@ class Speaker:
             if a is END:
                 self.stream.write(self.pause)
                 n += 1
-                if os.path.exists(STOPFLAG) or os.path.exists(BARGE):
+                if os.path.exists(STOPFLAG) or os.path.exists(BARGE) or os.path.exists(FLUSH):
                     log("stop: flag seen mid-utterance, finishing at sentence boundary")
                     break
                 # a notify may jump in between sentences of a long utterance
@@ -410,6 +414,8 @@ class Speaker:
                 continue
             if os.path.exists(BARGE):
                 log("barge: user spoke over us, cutting playback")
+                break
+            if os.path.exists(FLUSH):
                 break
             if first is None:
                 first = time.perf_counter() - t0
@@ -443,6 +449,9 @@ class Speaker:
         poll = self.c["poll_ms"] / 1000
         release_at = None
 
+        ready_at = time.time()     # jobs that queued during the model load age from here,
+                                   # so a slow cold start does not throw the first lines away
+        max_age = float(self.c.get("max_job_age_s") or 0)
         log(f"run: pid={os.getpid()} watching {SPOOL}")
         while True:
             now = time.time()
@@ -455,6 +464,18 @@ class Speaker:
                 self.shutdown()
                 os._exit(0)        # torch/onnx worker threads can stall interpreter teardown
                                    # for many seconds while the mutex stays held; hard-exit after cleanup
+            if os.path.exists(FLUSH):
+                dropped = sum(1 for n in _pending() if _take(n) or True)
+                _speaking_off()
+                self._abort()
+                self.duck.release()
+                try:
+                    os.remove(FLUSH)
+                except OSError:
+                    pass
+                log(f"flush: dropped {dropped} queued job(s)")
+                release_at = None
+                continue
             names = _pending()
             if names:
                 if os.path.exists(OFF):
@@ -463,6 +484,15 @@ class Speaker:
                     log(f"off: drained {len(names)} job(s) silently")
                     continue
                 job = _take(names[0])
+                if job and max_age > 0:
+                    ts = job.get("ts", now)
+                    if ts >= T_START - max_age:        # queued while we were loading:
+                        ts = max(ts, ready_at)         # its wait starts when we could speak
+                    age = now - ts
+                    if age > max_age:
+                        log(f"stale: dropped {job.get('kind','speak')} aged {age:.0f}s "
+                            f"chars={len(job.get('text',''))}")
+                        continue
                 if job:
                     _speaking_on()
                     try:
@@ -547,6 +577,15 @@ def main(argv):
         print("queued", enqueue(text, kind="notify" if cmd == "notify" else "speak"))
     elif cmd == "status":
         return status()
+    elif cmd == "flush":
+        n = len(_pending())
+        with open(FLUSH, "w") as f:       # the service cuts playback and drains the spool;
+            f.write(str(time.time()))     # with no service running the files are removed here
+        if not os.path.exists(PIDFILE):
+            for name in _pending():
+                _take(name)
+            os.remove(FLUSH)
+        print(f"flushed {n} job(s)")
     elif cmd == "start":
         # detached background start, used by the WSL hook and by hand
         subprocess.Popen([os.path.join(HERE, ".venv", "Scripts", "pythonw.exe"),
