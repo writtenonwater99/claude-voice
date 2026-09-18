@@ -77,6 +77,21 @@ the service. Without this you get the same voice on Kokoro, ~0.4 s slower to sta
 | Ducking depth | `duck_factor` in `config.json` (0.4 = others at 40 %), then restart the service |
 | Private jargon | `glossary.local.json` (gitignored) — ALL-CAPS project names and words the voice mangles |
 
+## Also works with Codex CLI
+
+Same voice, same speaker, one extra file. Codex has no `MessageDisplay` event, so replies are spoken
+once per turn (at `Stop`) instead of streamed; the budget and summary tail behave the same.
+Put this in `~/.codex/hooks.json` (adjust the path), then approve it once with `/hooks` inside Codex:
+
+```json
+{"hooks": {
+  "Stop": [{"hooks": [{"type": "command", "command": "python3 /mnt/c/Users/<you>/voice/hook/codex.py 2>/dev/null || true", "timeout": 10}]}],
+  "PermissionRequest": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 /mnt/c/Users/<you>/voice/hook/codex.py 2>/dev/null || true", "timeout": 10}]}]
+}}
+```
+
+Codex silently skips hooks that have not been approved, and asks again after any edit to the file.
+
 ## Changing the voice
 
 - **Another Kokoro voice:** `"engine": "kokoro", "voice": "af_heart"` in `config.json` (54 voices; `speed` applies).
